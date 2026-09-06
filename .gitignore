@@ -1,1 +1,11 @@
-.DS_Store
+node_modules/
+.next/
+.env*
+!.env.example
+.data/
+*.tsbuildinfo
+test-results/
+playwright-report/
+
+# Separately delivered source-derived PRD; excluded from implementation publication.
+/docs/PRD.md

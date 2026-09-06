@@ -1,0 +1,42 @@
+{
+  "name": "workeva",
+  "version": "0.3.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "worker": "node --import tsx scripts/worker.ts",
+    "seed": "node --import tsx scripts/seed.ts",
+    "test:browser": "node scripts/browser-smoke.mjs",
+    "test:api": "node scripts/api-smoke.mjs"
+  },
+  "dependencies": {
+    "@azure/identity": "4.13.2",
+    "@azure/storage-blob": "12.33.0",
+    "@xyflow/react": "12.11.6",
+    "jose": "6.2.12",
+    "lucide-react": "1.41.0",
+    "luxon": "3.7.2",
+    "mssql": "12.7.0",
+    "next": "16.3.4",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.3.289",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/luxon": "3.7.5",
+    "@types/mssql": "12.3.0",
+    "@types/node": "26.4.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
+  }
+}
