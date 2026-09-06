@@ -90,7 +90,7 @@ export function Shell({ view, setView, snapshot, onPersona, children }: Props) {
                   if (
                     hasUnsaved &&
                     !window.confirm(
-                      "You have unsaved responses. Leave this review?",
+                      "You have unsaved changes. Leave this page?",
                     )
                   )
                     return;

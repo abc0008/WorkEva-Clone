@@ -23,6 +23,8 @@ Local records persist under `.data/`; uploaded PDFs are private and served throu
 2. As Taylor, inspect the management dashboard. Upload a PDF in Documents, configure sections/pages/metrics/owners, then publish. New versions require fresh sign-offs and retain historical context.
 3. In Workflow designer, edit the template and dependencies, publish it and create a period run. In Workflow runs/My tasks, complete and attest prerequisites. Hard edges block dependent work. Reopening signed work invalidates dependent attestations.
 
+Workflows can also be authored as versioned JSON or YAML and rendered with React Flow. See [the workflow format](docs/WORKFLOW_FORMAT.md) and the equivalent [JSON](examples/quarterly-certification.json) / [YAML](examples/quarterly-certification.yaml) examples. Imports create new drafts; exports preserve dependencies and canvas positions.
+
 ## Verification
 
 ```bash

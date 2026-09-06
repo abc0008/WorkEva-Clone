@@ -29,6 +29,7 @@ import {
   requireText,
   revision,
 } from "./domain";
+import { validateWorkflowDefinition } from "@/lib/workflow-definition";
 
 const DEFAULT_CALENDAR: Calendar = {
   timezone: "America/Chicago",
@@ -873,8 +874,24 @@ function saveTemplate(
         409,
       );
   }
+  let importedDefinition:
+    | ReturnType<typeof validateWorkflowDefinition>
+    | undefined;
+  if (command.definition !== undefined) {
+    try {
+      importedDefinition = validateWorkflowDefinition(command.definition);
+    } catch (error) {
+      fail(
+        error instanceof Error ? error.message : "Invalid workflow definition.",
+      );
+    }
+  }
   let rawNodes = command.nodes;
   let rawEdges = command.edges;
+  if (importedDefinition) {
+    rawNodes = importedDefinition.nodes;
+    rawEdges = importedDefinition.edges;
+  }
   const sourceTemplateId = asOptionalString(
     command.sourceTemplateId,
     "sourceTemplateId",
@@ -897,7 +914,11 @@ function saveTemplate(
   const normalizedEdges = validateEdges(normalizedNodes, edges);
   if (existing) {
     revision(existing.revision, command.expectedRevision);
-    existing.name = asString(command.name, "name", 500);
+    existing.name = asString(
+      importedDefinition?.name ?? command.name,
+      "name",
+      500,
+    );
     existing.nodes = normalizedNodes;
     existing.edges = normalizedEdges;
     existing.revision += 1;
@@ -913,7 +934,7 @@ function saveTemplate(
   }
   const template: WorkflowTemplate = {
     id: id(),
-    name: asString(command.name, "name", 500),
+    name: asString(importedDefinition?.name ?? command.name, "name", 500),
     revision: 1,
     status: "DRAFT",
     nodes: normalizedNodes,

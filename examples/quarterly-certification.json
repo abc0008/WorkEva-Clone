@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "name": "Quarterly certification",
+  "nodes": [
+    {
+      "id": "prepare",
+      "title": "Prepare supporting schedules",
+      "type": "task",
+      "ownerId": "publisher",
+      "entity": "BANK",
+      "instructions": "Review the supporting evidence before completing this step.",
+      "dueOffset": 1,
+      "duration": 1,
+      "evidenceRequired": false,
+      "statement": "I attest that this step is complete and accurate.",
+      "position": {
+        "x": 80,
+        "y": 100
+      }
+    },
+    {
+      "id": "certify",
+      "title": "Certify financial results",
+      "type": "attestation",
+      "ownerId": "publisher",
+      "entity": "BANK",
+      "instructions": "Review the supporting evidence before completing this step.",
+      "dueOffset": 2,
+      "duration": 1,
+      "evidenceRequired": false,
+      "statement": "I attest that this step is complete and accurate.",
+      "position": {
+        "x": 420,
+        "y": 100
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "prepare-certify",
+      "source": "prepare",
+      "target": "certify",
+      "hard": true,
+      "lag": 1
+    }
+  ]
+}

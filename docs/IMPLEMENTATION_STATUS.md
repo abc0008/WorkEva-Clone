@@ -14,6 +14,7 @@ Verified 6 September 2026. This branch delivers a runnable first implementation 
 | Management view | Current-version response/sign-off coverage, exceptions, overdue assignments and filters | Browser page and server-scoped snapshots; response percentages use required metrics |
 | Final export | Downloadable JSON manifest with document metadata, responses/history, signatures and validity events, original PDF URL | Real API journey verifies current version; exports are audited |
 | Diagram designer | Draggable nodes, connect/delete edges, hard/advisory links and lag, property editor, arrange, duplicate, save and publish | React Flow; domain rejects cycles, duplicates and self-links; browser publishes a template |
+| Workflow source authoring | Versioned JSON/YAML file import, explicit source apply, current-graph downloads, draft creation and unsaved-change guards | Format and server tests; browser imports YAML, drags/edits nodes, exports JSON, reimports and saves a source-edited name while preserving the published template |
 | Workflow runs | Published template snapshots, unique task IDs, period selection, pinned calendar/baseline dates | Domain tests verify run isolation and business-day cutoff dates |
 | Task execution | Start, submit, explicit attestation, independent approval, evidence, forecast, reopen and document-gate rebinding | Browser completes a task; real HTTP journey completes the dependency chain |
 | Dependency enforcement | Every hard predecessor must have a valid completion; business-day lag enforced; invalidation cascades | Fan-in, weekend lag, version replacement and reopen tests; blocked state calculated on server |
@@ -28,12 +29,14 @@ Verified 6 September 2026. This branch delivers a runnable first implementation 
 ## Test evidence
 
 - `npm run build`: production compilation, TypeScript and route generation pass.
-- `npm test`: 30 tests across review, workflow, cross-feature contracts, access, HTTP origin and platform boundaries.
+- `npm test`: 56 tests across review, workflow, portable definitions, cross-feature contracts, access, HTTP origin and platform boundaries.
 - `npm run test:api`: actual Next HTTP server journeys cover unauthorized/cross-entity mutations, repeat sign requests, both assigned reviewers, finalization, graph-cycle rejection, run completion, document gate signing, replacement PDF publication, dependent signature invalidation and current-version export.
 - `npm run test:browser`: Chromium at 1536 × 1024 and 390 × 844; renders the source PDF, saves five responses, records and verifies a signature, switches persona, opens Documents, publishes a workflow template, creates a run, starts/submits/attests a task and checks mobile overflow. No page errors or horizontal overflow in the verified run.
 - CI repeats the build, tests and representative HTTP/browser journeys. CI has been added; its remote execution has not been observed in this session.
 
 Browser evidence uses an isolated synthetic state/files directory. The script writes screenshots and `result.json` beneath `.data/qa/`. Local Chromium was supplied through `PLAYWRIGHT_CHROMIUM_EXECUTABLE`; on another runner install Playwright Chromium using the README command.
+
+The source-authoring browser journey also checks invalid YAML, canceled discard of unapplied source, node-position round trips, and a 390px designer layout. Connected Browser navigation to localhost returned `ERR_BLOCKED_BY_CLIENT`, so verification used local Playwright Chromium. JSON/YAML examples and the portable API contract are documented in [WORKFLOW_FORMAT.md](WORKFLOW_FORMAT.md). The format contains no runtime signatures or completion history.
 
 ## Visual review
 

@@ -71,3 +71,13 @@ The implementation will be runnable and reviewable locally. Actual Azure subscri
 ## Execution record
 
 The plan was executed with GPT-5.6 Luna sub-agents at high effort for domain, platform and interface work. After sub-agent usage limits were reached, root finished integration, the PDF viewer, diagram interactions, task dialogs, publisher/reviewer controls, authorization fixes and verification. See IMPLEMENTATION_STATUS.md for the delivered coverage, actual checks and explicit deviations from the initial plan.
+
+## Workflow source authoring extension
+
+1. Introduce a versioned, strict JSON contract for workflow definitions and safe YAML parsing/serialization. Preserve step IDs, ownership, business-day timing, hard/advisory dependencies, and positions; exclude runtime and publication state.
+2. Add file import, editable JSON/YAML source with explicit apply, and downloads to the existing React Flow designer. Imports create new drafts; protect unsaved edits and published templates.
+3. Accept the same definition in `saveTemplate`, preserving server authorization, document-reference checks, optimistic concurrency, and existing command compatibility.
+4. Verify format round trips, invalid graph rejection, YAML parsing boundaries, permissions, draft persistence, and the source/visual browser journey. Run regression tests and production compilation.
+5. Provide equivalent JSON/YAML examples and format documentation, then update the existing draft PR. No deployment or merge.
+
+Implementation delegated to GPT 5.6 Luna at high effort at the user's request; root owns integration review, independent tests, and documentation.

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 const port = Number(process.env.WORKEVA_TEST_PORT || 3111),
   base = `http://127.0.0.1:${port}`,
@@ -60,6 +60,25 @@ try {
     await new Promise((r) => setTimeout(r, 300));
   }
   let s = await state();
+  const portable = JSON.parse(
+    await readFile("examples/quarterly-certification.json", "utf8"),
+  );
+  const imported = await command("publisher", {
+    type: "saveTemplate",
+    definition: portable,
+  });
+  assert.equal(imported.status, "DRAFT");
+  assert.deepEqual(imported.nodes, portable.nodes);
+  assert.deepEqual(imported.edges, portable.edges);
+  const malformed = structuredClone(portable);
+  malformed.nodes[0].signatureId = "must-not-import";
+  await command(
+    "publisher",
+    { type: "saveTemplate", definition: malformed },
+    422,
+  );
+  await command("avery", { type: "saveTemplate", definition: portable }, 403);
+  assert.equal((await state()).templates.length, s.templates.length + 1);
   await command(
     "publisher",
     {
