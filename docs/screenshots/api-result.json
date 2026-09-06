@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "checks": [
+    "unauthorized signing",
+    "cross-entity writes",
+    "idempotent signing",
+    "finalization",
+    "cycle rejection",
+    "workflow attestations",
+    "PDF upload",
+    "replacement invalidation",
+    "version-specific export"
+  ]
+}
