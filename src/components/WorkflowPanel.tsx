@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
+  Code2,
+  Download,
   FileCheck2,
   GitBranch,
   Link2,
@@ -13,6 +15,7 @@ import {
   Settings2,
   ShieldCheck,
   Trash2,
+  Upload,
   UserRound,
 } from "lucide-react";
 import type {
@@ -28,6 +31,13 @@ import { TaskDialog, type TaskAction } from "./TaskDialog";
 import { FlowCanvas } from "./FlowCanvas";
 import { api } from "@/lib/client";
 import { EmptyState, ErrorNotice, fmtDate, Status } from "./ui";
+import {
+  parseWorkflowDefinition,
+  serializeWorkflowDefinition,
+  toWorkflowDefinition,
+  type WorkflowDefinition,
+  type WorkflowDefinitionFormat,
+} from "@/lib/workflow-definition";
 
 type Props = {
   snapshot: AppSnapshot;
@@ -484,19 +494,119 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState("");
   const [showNew, setShowNew] = useState(false);
+  const [sourceFormat, setSourceFormat] =
+    useState<WorkflowDefinitionFormat>("json");
+  const [sourceText, setSourceText] = useState(() => {
+    if (!template) return "";
+    try {
+      return serializeWorkflowDefinition(
+        toWorkflowDefinition(template),
+        "json",
+      );
+    } catch {
+      return "";
+    }
+  });
+  const [sourceBaseline, setSourceBaseline] = useState(() => sourceText);
+  const [savedSignature, setSavedSignature] = useState(() =>
+    template
+      ? JSON.stringify({
+          name: template.name,
+          nodes: template.nodes,
+          edges: template.edges,
+        })
+      : "",
+  );
+  const importInput = useRef<HTMLInputElement>(null);
   const [link, setLink] = useState({
     source: "",
     target: "",
     hard: true,
     lag: 0,
   });
+  const currentSignature = JSON.stringify({
+    name: template?.name || "",
+    nodes,
+    edges,
+  });
+  const dirty = !!template && currentSignature !== savedSignature;
+  const sourceDirty = sourceText !== sourceBaseline;
+  useEffect(() => {
+    const unsaved = dirty || sourceDirty;
+    const state = window as unknown as { workevaHasUnsaved?: boolean };
+    state.workevaHasUnsaved = unsaved;
+    const guard = (event: BeforeUnloadEvent) => {
+      if (!unsaved) return;
+      event.preventDefault();
+      event.returnValue = "You have unsaved workflow changes.";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => {
+      state.workevaHasUnsaved = false;
+      window.removeEventListener("beforeunload", guard);
+    };
+  }, [dirty, sourceDirty]);
+  const confirmDiscard = (action: string) =>
+    !(dirty || sourceDirty) ||
+    window.confirm(
+      `You have unsaved workflow changes. Continue to ${action} and discard them?`,
+    );
+  const setLoadedTemplate = (
+    result: WorkflowTemplate,
+    format: WorkflowDefinitionFormat = sourceFormat,
+  ) => {
+    setSourceFormat(format);
+    setTemplateOverride(result);
+    setTemplateId(result.id);
+    setNodes(result.nodes);
+    setEdges(result.edges);
+    setSelectedId(result.nodes[0]?.id || "");
+    setSavedSignature(
+      JSON.stringify({
+        name: result.name,
+        nodes: result.nodes,
+        edges: result.edges,
+      }),
+    );
+    try {
+      const serialized = serializeWorkflowDefinition(
+        toWorkflowDefinition(result),
+        format,
+      );
+      setSourceText(serialized);
+      setSourceBaseline(serialized);
+    } catch {
+      setSourceText("");
+      setSourceBaseline("");
+    }
+  };
   const switchTemplate = (id: string) => {
+    if (!confirmDiscard("switch templates")) return;
     const t = snapshot.templates.find((x) => x.id === id);
     setTemplateOverride(undefined);
     setTemplateId(id);
     setNodes(t?.nodes || []);
     setEdges(t?.edges || []);
     setSelectedId(t?.nodes[0]?.id || "");
+    setSavedSignature(
+      t ? JSON.stringify({ name: t.name, nodes: t.nodes, edges: t.edges }) : "",
+    );
+    if (t) {
+      try {
+        const serialized = serializeWorkflowDefinition(
+          toWorkflowDefinition(t),
+          sourceFormat,
+        );
+        setSourceText(serialized);
+        setSourceBaseline(serialized);
+      } catch {
+        setSourceText("");
+        setSourceBaseline("");
+      }
+    } else {
+      setSourceText("");
+      setSourceBaseline("");
+    }
   };
   const selected = nodes.find((n) => n.id === selectedId);
   const patchNode = (patch: Partial<WorkflowNode>) =>
@@ -505,6 +615,10 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
     );
   const save = async (publish = false) => {
     if (!template) return;
+    if (sourceDirty) {
+      setError("Apply the source editor changes before saving this template.");
+      return;
+    }
     if (
       nodes.some(
         (n) =>
@@ -552,10 +666,7 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
             },
           ),
         );
-      setTemplateOverride(result);
-      setTemplateId(result.id);
-      setNodes(result.nodes);
-      setEdges(result.edges);
+      setLoadedTemplate(result);
       await onRefresh();
       setToast(publish ? "Template published" : "Template saved");
     } catch (e) {
@@ -567,6 +678,7 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
     }
   };
   const createTemplate = async () => {
+    if (!confirmDiscard("create a new template")) return;
     const name = newName.trim();
     if (!name) {
       setError("Enter a template name.");
@@ -590,11 +702,7 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
           },
         ),
       );
-      setTemplateOverride(result);
-      setTemplateId(result.id);
-      setNodes(result.nodes);
-      setEdges(result.edges);
-      setSelectedId(result.nodes[0]?.id || "");
+      setLoadedTemplate(result);
       setNewName("");
       setShowNew(false);
       await onRefresh();
@@ -607,6 +715,7 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
   };
   const duplicate = async () => {
     if (!template) return;
+    if (!confirmDiscard("open the duplicated template")) return;
     setBusy(true);
     try {
       const result = unwrap(
@@ -622,17 +731,138 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
           },
         ),
       );
-      setTemplateOverride(result);
-      setTemplateId(result.id);
-      setNodes(result.nodes);
-      setEdges(result.edges);
-      setSelectedId(result.nodes[0]?.id || "");
+      setLoadedTemplate(result);
       await onRefresh();
       setToast("Editable template copy created");
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  };
+  const saveDefinitionAsDraft = async (
+    definition: WorkflowDefinition,
+    successMessage: string,
+    format: WorkflowDefinitionFormat = sourceFormat,
+  ) => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = unwrap(
+        await api<WorkflowTemplate | { result?: WorkflowTemplate }>(
+          "/api/commands",
+          {
+            method: "POST",
+            body: JSON.stringify({ type: "saveTemplate", definition }),
+          },
+        ),
+      );
+      setLoadedTemplate(result, format);
+      await onRefresh();
+      setToast(successMessage);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to import workflow.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const applySource = () => {
+    if (!template) return;
+    try {
+      const definition = parseWorkflowDefinition(sourceText, sourceFormat);
+      // A published template cannot be changed in place. Applying source to
+      // one creates the same kind of independent draft as file import.
+      if (template.status === "PUBLISHED") {
+        void saveDefinitionAsDraft(definition, "Source applied as a new draft");
+        return;
+      }
+      setTemplateOverride({
+        ...template,
+        name: definition.name,
+        nodes: definition.nodes,
+        edges: definition.edges,
+      });
+      setNodes(definition.nodes);
+      setEdges(definition.edges);
+      setSelectedId(definition.nodes[0]?.id || "");
+      setError("");
+      const serialized = serializeWorkflowDefinition(definition, sourceFormat);
+      setSourceText(serialized);
+      setSourceBaseline(serialized);
+      setToast("Source applied to the draft; save when ready");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Invalid workflow source.");
+    }
+  };
+  const loadCurrentSource = () => {
+    if (!template) return;
+    if (
+      sourceDirty &&
+      !window.confirm("Replace the source editor with the current graph?")
+    )
+      return;
+    try {
+      const serialized = serializeWorkflowDefinition(
+        toWorkflowDefinition({ name: template.name, nodes, edges }),
+        sourceFormat,
+      );
+      setSourceText(serialized);
+      setSourceBaseline(serialized);
+      setError("");
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Unable to serialize workflow.",
+      );
+    }
+  };
+  const downloadDefinition = (format: WorkflowDefinitionFormat) => {
+    if (!template) return;
+    try {
+      const definition = toWorkflowDefinition({
+        name: template.name,
+        nodes,
+        edges,
+      });
+      const content = serializeWorkflowDefinition(definition, format);
+      const blob = new Blob([content], {
+        type: format === "json" ? "application/json" : "text/yaml",
+      });
+      const href = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download = `${
+        template.name
+          .trim()
+          .replace(/[^a-z0-9]+/gi, "-")
+          .replace(/^-|-$/g, "") || "workflow"
+      }.${format === "json" ? "json" : "yaml"}`;
+      anchor.click();
+      URL.revokeObjectURL(href);
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to export workflow.");
+    }
+  };
+  const importFile = async (file: File) => {
+    if (!confirmDiscard("import a workflow")) return;
+    if (file.size > 1_000_000) {
+      setError("Workflow files must be under 1 MB.");
+      return;
+    }
+    const extension = file.name.toLowerCase().split(".").pop();
+    const format: WorkflowDefinitionFormat =
+      extension === "yaml" || extension === "yml" ? "yaml" : "json";
+    try {
+      const definition = parseWorkflowDefinition(await file.text(), format);
+      await saveDefinitionAsDraft(
+        definition,
+        "Workflow imported as a new draft",
+        format,
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Unable to import workflow file.",
+      );
     }
   };
   const autoLayout = () => {
@@ -712,11 +942,29 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
             <h1>Workflow designer</h1>
             <p>Build reusable executable attestation templates</p>
           </div>
+          <input
+            ref={importInput}
+            type="file"
+            accept=".json,.yaml,.yml,application/json,text/yaml"
+            hidden
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void importFile(file);
+            }}
+          />
           <button
             className="we-button primary"
             onClick={() => setShowNew(true)}
           >
             <Plus size={15} /> New template
+          </button>
+          <button
+            className="we-button"
+            onClick={() => importInput.current?.click()}
+            disabled={busy}
+          >
+            <Upload size={15} /> Import file
           </button>
         </div>
         {showNew && (
@@ -736,6 +984,7 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
           </div>
         )}
         <div className="we-card">
+          {error && <ErrorNotice message={error} />}
           <EmptyState
             icon={<GitBranch size={29} />}
             title="No workflow templates"
@@ -744,6 +993,7 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
         </div>
       </div>
     );
+  const immutable = template.status === "PUBLISHED";
   return (
     <div className="we-content">
       <div className="we-page-head">
@@ -754,6 +1004,24 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
         <div className="we-page-actions">
           <button className="we-button" onClick={() => setShowNew((v) => !v)}>
             <Plus size={15} /> New template
+          </button>
+          <input
+            ref={importInput}
+            type="file"
+            accept=".json,.yaml,.yml,application/json,text/yaml"
+            hidden
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void importFile(file);
+            }}
+          />
+          <button
+            className="we-button"
+            onClick={() => importInput.current?.click()}
+            disabled={busy}
+          >
+            <Upload size={15} /> Import file
           </button>
           <select
             className="we-select"
@@ -776,7 +1044,7 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
           <button
             className="we-button"
             onClick={() => void save()}
-            disabled={busy}
+            disabled={busy || template.status === "PUBLISHED"}
           >
             <Save size={15} /> Save draft
           </button>
@@ -807,6 +1075,91 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
         </div>
       )}
       {error && <ErrorNotice message={error} />}
+      <section className="we-card" style={{ marginBottom: 14 }}>
+        <div className="we-card-title">
+          <div>
+            <h2>Workflow source</h2>
+            <p>
+              Edit JSON or YAML, then apply explicitly.{" "}
+              {dirty ? "Unsaved visual changes are present." : ""}
+            </p>
+          </div>
+          <Code2 size={18} color="#698096" />
+        </div>
+        <div style={{ padding: "0 16px 16px" }}>
+          <div className="we-toolbar" style={{ marginBottom: 9 }}>
+            <select
+              className="we-select"
+              value={sourceFormat}
+              onChange={(e) => {
+                const format = e.target.value as WorkflowDefinitionFormat;
+                if (
+                  sourceDirty &&
+                  !window.confirm(
+                    "Replace the source editor in the new format?",
+                  )
+                )
+                  return;
+                setSourceFormat(format);
+                try {
+                  const serialized = serializeWorkflowDefinition(
+                    toWorkflowDefinition({ name: template.name, nodes, edges }),
+                    format,
+                  );
+                  setSourceText(serialized);
+                  setSourceBaseline(serialized);
+                } catch {
+                  // Keep the editor content if the in-progress visual graph is invalid.
+                }
+              }}
+              aria-label="Workflow source format"
+              style={{ width: 120 }}
+            >
+              <option value="json">JSON</option>
+              <option value="yaml">YAML</option>
+            </select>
+            <button className="we-button small" onClick={loadCurrentSource}>
+              Load current
+            </button>
+            <button
+              className="we-button primary small"
+              onClick={applySource}
+              disabled={busy}
+            >
+              <Check size={14} /> Apply source
+            </button>
+            <span
+              style={{ marginLeft: "auto", color: "#73839a", fontSize: 11 }}
+            >
+              Export current graph:
+            </span>
+            <button
+              className="we-button small"
+              onClick={() => downloadDefinition("json")}
+            >
+              <Download size={13} /> JSON
+            </button>
+            <button
+              className="we-button small"
+              onClick={() => downloadDefinition("yaml")}
+            >
+              <Download size={13} /> YAML
+            </button>
+          </div>
+          <textarea
+            className="we-textarea"
+            aria-label="Workflow source editor"
+            value={sourceText}
+            onChange={(e) => setSourceText(e.target.value)}
+            spellCheck={false}
+            style={{
+              minHeight: 210,
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 12,
+            }}
+          />
+        </div>
+      </section>
       <div className="we-workflow-grid">
         <section className="we-card we-canvas">
           <div
@@ -818,6 +1171,7 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
               <p>
                 {nodes.length} nodes · {edges.length} dependencies ·{" "}
                 {template.status}
+                {immutable ? " · Published templates are immutable" : ""}
               </p>
             </div>
             <div className="we-toolbar">
@@ -846,6 +1200,7 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
             onSelect={setSelectedId}
             onNodes={setNodes}
             onEdges={setEdges}
+            readonly={immutable}
           />
         </section>
         <aside className="we-card we-inspector">
@@ -857,300 +1212,311 @@ function Designer({ snapshot, onRefresh, setToast }: Props) {
             <Settings2 size={18} color="#698096" />
           </div>
           {selected ? (
-            <div className="we-inspector-body">
-              <div className="we-field">
-                <label className="we-label">Node title</label>
-                <input
-                  className="we-input"
-                  required
-                  value={selected.title}
-                  onChange={(e) => patchNode({ title: e.target.value })}
-                />
-              </div>
-              <div className="we-field">
-                <label className="we-label">Entity scope</label>
-                <input
-                  className="we-input"
-                  aria-label="Node entity"
-                  value={selected.entity}
-                  onChange={(e) => patchNode({ entity: e.target.value })}
-                />
-              </div>
-              <div className="we-field">
-                <label className="we-label">Node type</label>
-                <select
-                  className="we-select"
-                  value={selected.type}
-                  onChange={(e) =>
-                    patchNode({ type: e.target.value as WorkflowNode["type"] })
-                  }
-                >
-                  <option value="task">Task</option>
-                  <option value="attestation">Attestation</option>
-                  <option value="milestone">Milestone</option>
-                  <option value="input">External input</option>
-                  <option value="document_gate">Document review gate</option>
-                </select>
-              </div>
-              <div className="we-field">
-                <label className="we-label">Accountable owner</label>
-                <select
-                  className="we-select"
-                  value={selected.ownerId}
-                  onChange={(e) => patchNode({ ownerId: e.target.value })}
-                >
-                  {snapshot.users
-                    .filter((u) => u.active)
-                    .map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div className="we-field">
-                <label className="we-label">
-                  Independent approver (optional)
-                </label>
-                <select
-                  className="we-select"
-                  value={selected.approverId || ""}
-                  onChange={(e) =>
-                    patchNode({ approverId: e.target.value || undefined })
-                  }
-                >
-                  <option value="">No approver</option>
-                  {snapshot.users
-                    .filter((u) => u.active && u.id !== selected.ownerId)
-                    .map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 9,
-                }}
-              >
+            <fieldset
+              disabled={immutable}
+              style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
+            >
+              <div className="we-inspector-body">
                 <div className="we-field">
-                  <label className="we-label">Due offset (BD)</label>
+                  <label className="we-label">Node title</label>
                   <input
                     className="we-input"
-                    type="number"
-                    min="0"
                     required
-                    value={selected.dueOffset}
-                    onChange={(e) =>
-                      patchNode({
-                        dueOffset: Math.max(0, Number(e.target.value)),
-                      })
-                    }
+                    value={selected.title}
+                    aria-label="Node title"
+                    onChange={(e) => patchNode({ title: e.target.value })}
                   />
                 </div>
                 <div className="we-field">
-                  <label className="we-label">Duration (days)</label>
+                  <label className="we-label">Entity scope</label>
                   <input
                     className="we-input"
-                    type="number"
-                    min="0"
-                    required
-                    value={selected.duration}
-                    onChange={(e) =>
-                      patchNode({
-                        duration: Math.max(0, Number(e.target.value)),
-                      })
-                    }
+                    aria-label="Node entity"
+                    value={selected.entity}
+                    onChange={(e) => patchNode({ entity: e.target.value })}
                   />
                 </div>
-              </div>
-              <div className="we-field">
-                <label className="we-label">Instructions</label>
-                <textarea
-                  className="we-textarea"
-                  value={selected.instructions}
-                  onChange={(e) => patchNode({ instructions: e.target.value })}
-                />
-              </div>
-              <div className="we-field">
-                <label className="we-label">Attestation statement</label>
-                <textarea
-                  className="we-textarea"
-                  required
-                  value={selected.statement}
-                  onChange={(e) => patchNode({ statement: e.target.value })}
-                />
-              </div>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  color: "#445770",
-                  fontSize: 12,
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.evidenceRequired}
-                  onChange={(e) =>
-                    patchNode({ evidenceRequired: e.target.checked })
-                  }
-                />{" "}
-                Required evidence
-              </label>
-              {selected.type === "document_gate" && (
-                <div className="we-gate-fields">
+                <div className="we-field">
+                  <label className="we-label">Node type</label>
+                  <select
+                    className="we-select"
+                    value={selected.type}
+                    onChange={(e) =>
+                      patchNode({
+                        type: e.target.value as WorkflowNode["type"],
+                      })
+                    }
+                  >
+                    <option value="task">Task</option>
+                    <option value="attestation">Attestation</option>
+                    <option value="milestone">Milestone</option>
+                    <option value="input">External input</option>
+                    <option value="document_gate">Document review gate</option>
+                  </select>
+                </div>
+                <div className="we-field">
+                  <label className="we-label">Accountable owner</label>
+                  <select
+                    className="we-select"
+                    value={selected.ownerId}
+                    onChange={(e) => patchNode({ ownerId: e.target.value })}
+                  >
+                    {snapshot.users
+                      .filter((u) => u.active)
+                      .map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <div className="we-field">
+                  <label className="we-label">
+                    Independent approver (optional)
+                  </label>
+                  <select
+                    className="we-select"
+                    value={selected.approverId || ""}
+                    onChange={(e) =>
+                      patchNode({ approverId: e.target.value || undefined })
+                    }
+                  >
+                    <option value="">No approver</option>
+                    {snapshot.users
+                      .filter((u) => u.active && u.id !== selected.ownerId)
+                      .map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 9,
+                  }}
+                >
                   <div className="we-field">
-                    <label className="we-label">Package</label>
-                    <select
-                      className="we-select"
-                      value={selected.packageId || ""}
+                    <label className="we-label">Due offset (BD)</label>
+                    <input
+                      className="we-input"
+                      type="number"
+                      min="0"
+                      required
+                      value={selected.dueOffset}
                       onChange={(e) =>
                         patchNode({
-                          packageId: e.target.value || undefined,
-                          documentVersionId: undefined,
+                          dueOffset: Math.max(0, Number(e.target.value)),
                         })
                       }
+                    />
+                  </div>
+                  <div className="we-field">
+                    <label className="we-label">Duration (days)</label>
+                    <input
+                      className="we-input"
+                      type="number"
+                      min="0"
+                      required
+                      value={selected.duration}
+                      onChange={(e) =>
+                        patchNode({
+                          duration: Math.max(0, Number(e.target.value)),
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="we-field">
+                  <label className="we-label">Instructions</label>
+                  <textarea
+                    className="we-textarea"
+                    value={selected.instructions}
+                    onChange={(e) =>
+                      patchNode({ instructions: e.target.value })
+                    }
+                  />
+                </div>
+                <div className="we-field">
+                  <label className="we-label">Attestation statement</label>
+                  <textarea
+                    className="we-textarea"
+                    required
+                    value={selected.statement}
+                    onChange={(e) => patchNode({ statement: e.target.value })}
+                  />
+                </div>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    color: "#445770",
+                    fontSize: 12,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.evidenceRequired}
+                    onChange={(e) =>
+                      patchNode({ evidenceRequired: e.target.checked })
+                    }
+                  />{" "}
+                  Required evidence
+                </label>
+                {selected.type === "document_gate" && (
+                  <div className="we-gate-fields">
+                    <div className="we-field">
+                      <label className="we-label">Package</label>
+                      <select
+                        className="we-select"
+                        value={selected.packageId || ""}
+                        onChange={(e) =>
+                          patchNode({
+                            packageId: e.target.value || undefined,
+                            documentVersionId: undefined,
+                          })
+                        }
+                      >
+                        <option value="">Choose package</option>
+                        {snapshot.packages.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.title} · {p.period}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="we-field">
+                      <label className="we-label">Published version</label>
+                      <select
+                        className="we-select"
+                        value={selected.documentVersionId || ""}
+                        onChange={(e) =>
+                          patchNode({
+                            documentVersionId: e.target.value || undefined,
+                          })
+                        }
+                      >
+                        <option value="">Choose version</option>
+                        {snapshot.versions
+                          .filter(
+                            (v) =>
+                              v.packageId === selected.packageId &&
+                              v.status === "PUBLISHED",
+                          )
+                          .map((v) => (
+                            <option key={v.id} value={v.id}>
+                              Version {v.number}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+                <div className="we-node-connect">
+                  <strong
+                    style={{
+                      color: "#3f536d",
+                      display: "block",
+                      marginBottom: 5,
+                    }}
+                  >
+                    Dependencies
+                  </strong>
+                  {edges.filter((e) => e.target === selected.id).length}{" "}
+                  predecessors ·{" "}
+                  {edges.filter((e) => e.source === selected.id).length}{" "}
+                  successors
+                </div>
+                <div className="we-link-editor">
+                  <label className="we-label">Add dependency</label>
+                  <div className="we-link-grid">
+                    <select
+                      className="we-select"
+                      value={link.source}
+                      onChange={(e) =>
+                        setLink({ ...link, source: e.target.value })
+                      }
                     >
-                      <option value="">Choose package</option>
-                      {snapshot.packages.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.title} · {p.period}
+                      <option value="">Predecessor</option>
+                      {nodes.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {n.title}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="we-select"
+                      value={link.target}
+                      onChange={(e) =>
+                        setLink({ ...link, target: e.target.value })
+                      }
+                    >
+                      <option value="">Successor</option>
+                      {nodes.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {n.title}
                         </option>
                       ))}
                     </select>
                   </div>
-                  <div className="we-field">
-                    <label className="we-label">Published version</label>
-                    <select
-                      className="we-select"
-                      value={selected.documentVersionId || ""}
-                      onChange={(e) =>
-                        patchNode({
-                          documentVersionId: e.target.value || undefined,
-                        })
-                      }
-                    >
-                      <option value="">Choose version</option>
-                      {snapshot.versions
-                        .filter(
-                          (v) =>
-                            v.packageId === selected.packageId &&
-                            v.status === "PUBLISHED",
-                        )
-                        .map((v) => (
-                          <option key={v.id} value={v.id}>
-                            Version {v.number}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-                </div>
-              )}
-              <div className="we-node-connect">
-                <strong
-                  style={{
-                    color: "#3f536d",
-                    display: "block",
-                    marginBottom: 5,
-                  }}
-                >
-                  Dependencies
-                </strong>
-                {edges.filter((e) => e.target === selected.id).length}{" "}
-                predecessors ·{" "}
-                {edges.filter((e) => e.source === selected.id).length}{" "}
-                successors
-              </div>
-              <div className="we-link-editor">
-                <label className="we-label">Add dependency</label>
-                <div className="we-link-grid">
-                  <select
-                    className="we-select"
-                    value={link.source}
-                    onChange={(e) =>
-                      setLink({ ...link, source: e.target.value })
-                    }
-                  >
-                    <option value="">Predecessor</option>
-                    {nodes.map((n) => (
-                      <option key={n.id} value={n.id}>
-                        {n.title}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="we-select"
-                    value={link.target}
-                    onChange={(e) =>
-                      setLink({ ...link, target: e.target.value })
-                    }
-                  >
-                    <option value="">Successor</option>
-                    {nodes.map((n) => (
-                      <option key={n.id} value={n.id}>
-                        {n.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="we-link-grid">
-                  <label className="we-check-label">
+                  <div className="we-link-grid">
+                    <label className="we-check-label">
+                      <input
+                        type="checkbox"
+                        checked={link.hard}
+                        onChange={(e) =>
+                          setLink({ ...link, hard: e.target.checked })
+                        }
+                      />{" "}
+                      Hard prerequisite
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={link.hard}
+                      className="we-input"
+                      type="number"
+                      min="0"
+                      value={link.lag}
                       onChange={(e) =>
-                        setLink({ ...link, hard: e.target.checked })
+                        setLink({ ...link, lag: Number(e.target.value) })
                       }
-                    />{" "}
-                    Hard prerequisite
-                  </label>
-                  <input
-                    className="we-input"
-                    type="number"
-                    min="0"
-                    value={link.lag}
-                    onChange={(e) =>
-                      setLink({ ...link, lag: Number(e.target.value) })
-                    }
-                    placeholder="Lag (BD)"
-                  />
+                      placeholder="Lag (BD)"
+                    />
+                  </div>
+                  <button className="we-button small" onClick={addLink}>
+                    <Link2 size={14} /> Add link
+                  </button>
                 </div>
-                <button className="we-button small" onClick={addLink}>
-                  <Link2 size={14} /> Add link
-                </button>
+                <div className="we-inspector-actions">
+                  <button
+                    className="we-button small danger"
+                    onClick={() => {
+                      setNodes((ns) => ns.filter((n) => n.id !== selected.id));
+                      setEdges((es) =>
+                        es.filter(
+                          (e) =>
+                            e.source !== selected.id &&
+                            e.target !== selected.id,
+                        ),
+                      );
+                      setSelectedId(
+                        nodes.find((n) => n.id !== selected.id)?.id || "",
+                      );
+                    }}
+                  >
+                    <Trash2 size={14} /> Delete
+                  </button>
+                  <button
+                    className="we-button primary small"
+                    onClick={() => void save()}
+                    disabled={busy}
+                  >
+                    <Save size={14} /> Save changes
+                  </button>
+                </div>
               </div>
-              <div className="we-inspector-actions">
-                <button
-                  className="we-button small danger"
-                  onClick={() => {
-                    setNodes((ns) => ns.filter((n) => n.id !== selected.id));
-                    setEdges((es) =>
-                      es.filter(
-                        (e) =>
-                          e.source !== selected.id && e.target !== selected.id,
-                      ),
-                    );
-                    setSelectedId(
-                      nodes.find((n) => n.id !== selected.id)?.id || "",
-                    );
-                  }}
-                >
-                  <Trash2 size={14} /> Delete
-                </button>
-                <button
-                  className="we-button primary small"
-                  onClick={() => void save()}
-                  disabled={busy}
-                >
-                  <Save size={14} /> Save changes
-                </button>
-              </div>
-            </div>
+            </fieldset>
           ) : (
             <EmptyState
               icon={<GitBranch size={27} />}

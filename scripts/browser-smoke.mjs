@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { chromium } from "@playwright/test";
+import { workflowSourceJourney } from "./workflow-source-journey.mjs";
 const port = Number(process.env.WORKEVA_TEST_PORT || 3110);
 const base = `http://127.0.0.1:${port}`;
 const dir = process.env.WORKEVA_QA_DIR || `.data/qa/${Date.now()}`;
@@ -114,6 +115,7 @@ try {
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth > window.innerWidth + 1,
   );
+  const workflowSource = await workflowSourceJourney(page, base, dir);
   await writeFile(
     `${dir}/result.json`,
     JSON.stringify(
@@ -121,6 +123,7 @@ try {
         errors,
         overflow,
         signaturePersisted: true,
+        workflowSource,
         viewport: [1536, 1024],
         mobile: [390, 844],
       },
@@ -138,6 +141,7 @@ try {
     ),
   );
 } catch (e) {
+  await writeFile(`${dir}/failure.txt`, String(e?.stack || e));
   if (page)
     await page
       .screenshot({ path: `${dir}/failure.png`, fullPage: true })

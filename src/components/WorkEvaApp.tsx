@@ -42,7 +42,7 @@ export default function WorkEvaApp({ view = "my-reviews" }: { view?: string }) {
     if (
       (window as unknown as { workevaHasUnsaved?: boolean })
         .workevaHasUnsaved &&
-      !window.confirm("You have unsaved responses. Switch user?")
+      !window.confirm("You have unsaved changes. Switch user?")
     )
       return;
     if (typeof window !== "undefined") {

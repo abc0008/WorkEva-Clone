@@ -1,11 +1,13 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ReactFlow,
   Background,
   Controls,
   MarkerType,
   Position,
+  useNodesInitialized,
+  useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { Dependency, WorkflowNode } from "@/lib/types";
@@ -19,6 +21,16 @@ type Props = {
   onNodes?: (nodes: WorkflowNode[]) => void;
   onEdges?: (edges: Dependency[]) => void;
 };
+function FitGraph({ graphKey }: { graphKey: string }) {
+  const initialized = useNodesInitialized();
+  const { fitView } = useReactFlow();
+  useEffect(() => {
+    if (!initialized) return;
+    const frame = requestAnimationFrame(() => void fitView({ padding: 0.15 }));
+    return () => cancelAnimationFrame(frame);
+  }, [initialized, graphKey, fitView]);
+  return null;
+}
 export function FlowCanvas({
   nodes,
   edges,
@@ -28,6 +40,9 @@ export function FlowCanvas({
   onNodes,
   onEdges,
 }: Props) {
+  const [measurements, setMeasurements] = useState<
+    Record<string, { width: number; height: number }>
+  >({});
   const container = useRef<HTMLDivElement>(null);
   const flow = useRef<() => void>(null);
   useEffect(() => {
@@ -60,6 +75,7 @@ export function FlowCanvas({
         nodes={nodes.map((node) => ({
           id: node.id,
           position: node.position,
+          measured: measurements[node.id],
           sourcePosition: Position.Right,
           targetPosition: Position.Left,
           selected: node.id === selectedId,
@@ -108,6 +124,18 @@ export function FlowCanvas({
         deleteKeyCode={readonly ? null : ["Backspace", "Delete"]}
         onNodeClick={(_, node) => onSelect?.(node.id)}
         onNodesChange={(changes) => {
+          for (const change of changes) {
+            if (change.type === "dimensions" && change.dimensions) {
+              const dimensions = change.dimensions;
+              setMeasurements((current) => {
+                const previous = current[change.id];
+                return previous?.width === dimensions.width &&
+                  previous?.height === dimensions.height
+                  ? current
+                  : { ...current, [change.id]: dimensions };
+              });
+            }
+          }
           if (readonly) return;
           let result = nodes;
           for (const change of changes) {
@@ -124,7 +152,7 @@ export function FlowCanvas({
               );
             }
           }
-          onNodes?.(result);
+          if (result !== nodes) onNodes?.(result);
         }}
         onEdgesChange={(changes) => {
           if (readonly) return;
@@ -162,6 +190,7 @@ export function FlowCanvas({
         maxZoom={2}
         aria-label="Workflow dependency diagram"
       >
+        <FitGraph graphKey={JSON.stringify(nodes.map((node) => node.id))} />
         <Background gap={20} color="#d6e1e7" />
         <Controls showInteractive={false} />
       </ReactFlow>
