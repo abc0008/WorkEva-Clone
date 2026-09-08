@@ -40,6 +40,7 @@ import {
 } from "@/lib/workflow-definition";
 
 type Props = {
+  initialTaskId?: string;
   snapshot: AppSnapshot;
   onRefresh: () => Promise<void>;
   setToast: (message: string) => void;
@@ -64,12 +65,24 @@ function Runs({
   onRefresh,
   setToast,
   onlyMine,
+  initialTaskId,
 }: Props & { onlyMine: boolean }) {
   const [period, setPeriod] = useState(
     snapshot.packages[0]?.period.match(/^\d{4}-\d{2}$/)?.[0] ||
       new Date().toISOString().slice(0, 7),
   );
-  const [selected, setSelected] = useState(snapshot.runs[0]?.id || "");
+  const [selected, setSelected] = useState(
+    snapshot.runs.find((r) => r.tasks.some((t) => t.id === initialTaskId))
+      ?.id ||
+      snapshot.runs[0]?.id ||
+      "",
+  );
+  useEffect(() => {
+    if (initialTaskId)
+      document
+        .getElementById(`task-${initialTaskId}`)
+        ?.scrollIntoView({ block: "center" });
+  }, [initialTaskId]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [impact, setImpact] = useState<Record<string, unknown> | null>(null);
@@ -259,7 +272,12 @@ function Runs({
               <div>
                 <RunSummary run={run} />
                 <section className="we-card" style={{ marginTop: 14 }}>
-                  <FlowCanvas nodes={run.tasks} edges={run.edges} readonly />
+                  <FlowCanvas
+                    nodes={run.tasks}
+                    edges={run.edges}
+                    selectedId={initialTaskId}
+                    readonly
+                  />
                 </section>
                 <section className="we-card we-impact-card">
                   <div className="we-card-title">
@@ -306,7 +324,7 @@ function TaskRow({
   const blocked = !!task.blocked;
   const needsAttest = !!task.approverId;
   return (
-    <div className="we-task-row">
+    <div className="we-task-row" id={`task-${task.id}`}>
       <div>
         <div className="we-task-title">{task.title}</div>
         <div className="we-task-detail">

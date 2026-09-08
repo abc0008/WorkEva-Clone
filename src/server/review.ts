@@ -23,6 +23,13 @@ import {
   requireText,
   revision,
 } from "./domain";
+import {
+  carryIssuesForward,
+  assertIssuesCarryable,
+  hasUnresolvedIssue,
+  hasUnresolvedIssueForVersion,
+} from "./issues";
+import { applyAssignmentRules } from "./administration";
 
 const answers: Answer[] = ["OKAY", "NEEDS_EXPLANATION", "NOT_APPLICABLE"];
 function localScanAllowed(): boolean {
@@ -476,10 +483,15 @@ function publishVersion(
       "Document scan must be clean before publication.",
     );
   validateNoCycleInParents(version.sections);
+  const publication = applyAssignmentRules(
+    state,
+    actor,
+    structuredClone(version),
+  );
   // Recheck the publication snapshot because users and access can change while a
   // draft is waiting for publication. Do this before changing the prior current
   // version so a failed publication leaves the aggregate untouched.
-  for (const section of version.sections) {
+  for (const section of publication.sections) {
     requireEntity(actor, section.entity);
     for (const reviewerId of section.reviewerIds) {
       const reviewer = user(state, reviewerId);
@@ -494,6 +506,9 @@ function publishVersion(
   const prior = pkg.currentVersionId
     ? versionFor(state, pkg.currentVersionId)
     : undefined;
+  if (prior) assertIssuesCarryable(state, prior.id, publication.sections);
+  version.sections = publication.sections;
+  version.assignmentRuleSnapshot = publication.assignmentRuleSnapshot;
   if (prior) {
     prior.status = "SUPERSEDED";
     for (const oldAssignment of state.assignments.filter(
@@ -607,6 +622,7 @@ function publishVersion(
       );
     }
   }
+  if (prior) carryIssuesForward(state, actor, prior.id, version.id);
   audit(
     state,
     actor,
@@ -736,6 +752,11 @@ function signReview(
       422,
       "Resolve all explanation exceptions before signing.",
     );
+  if (hasUnresolvedIssue(state, current.assignment.id))
+    throw new DomainError(
+      422,
+      "Resolve all open review issues before signing.",
+    );
   const childSections =
     state.versions
       .find((candidate) => candidate.id === current.version.id)
@@ -856,6 +877,11 @@ function finalizePackage(
     throw new DomainError(
       422,
       "Blocking exceptions must be resolved before finalization.",
+    );
+  if (hasUnresolvedIssueForVersion(state, version.id))
+    throw new DomainError(
+      422,
+      "Resolve all open review issues before finalization.",
     );
   pkg.finalVersionId = version.id;
   pkg.status = "FINAL";

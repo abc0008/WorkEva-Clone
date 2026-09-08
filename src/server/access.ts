@@ -1,6 +1,7 @@
 import type { AppState, Principal, Evidence, AppSnapshot } from "@/lib/types";
 import { taskBlocked } from "./workflow";
 import { DomainError, isValidSignature } from "./domain";
+import { canReadIssue } from "./issues";
 export const hasEntity = (actor: Principal, entity: string) =>
   actor.active &&
   (actor.entities.includes("*") || actor.entities.includes(entity));
@@ -83,17 +84,51 @@ export function scopedSnapshot(
       : taskIds.has(s.subjectId),
   );
   const signatureIds = new Set(signatures.map((s) => s.id));
+  const issues = (state.issues ?? []).filter((issue) =>
+    canReadIssue(state, actor, issue),
+  );
+  const assignmentRules = (state.assignmentRules ?? []).filter(
+    (rule) => canManage(actor) && hasEntity(actor, rule.entity),
+  );
+  const users = localMode
+    ? state.users
+    : state.users.filter(
+        (u) =>
+          u.id === actor.id ||
+          (canManage(actor) && u.entities.some((e) => hasEntity(actor, e))),
+      );
   const subjectIds = new Set([
     ...assignmentIds,
     ...taskIds,
     ...packages.map((p) => p.id),
     ...versionIds,
     ...runs.map((r) => r.id),
+    ...issues.map((issue) => issue.id),
+    ...assignmentRules.map((rule) => rule.id),
+    ...users
+      .filter(
+        (user) =>
+          user.id === actor.id ||
+          (canManage(actor) &&
+            user.entities.every((entity) => hasEntity(actor, entity))),
+      )
+      .map((user) => user.id),
   ]);
   return {
     ...state,
     principal: actor,
     localMode,
+    issues,
+    assignmentRules,
+    assignmentChanges: (state.assignmentChanges ?? []).filter((change) =>
+      assignmentIds.has(change.assignmentId),
+    ),
+    notificationPreferences: (state.notificationPreferences ?? []).filter(
+      (preference) => preference.userId === actor.id,
+    ),
+    notificationReceipts: (state.notificationReceipts ?? []).filter(
+      (receipt) => receipt.userId === actor.id,
+    ),
     packages,
     versions,
     assignments,
@@ -105,13 +140,7 @@ export function scopedSnapshot(
       })),
     })),
     signatures,
-    users: localMode
-      ? state.users
-      : state.users.filter(
-          (u) =>
-            u.id === actor.id ||
-            (canManage(actor) && u.entities.some((e) => hasEntity(actor, e))),
-        ),
+    users,
     templates: state.templates.filter(
       (t) =>
         t.nodes.every((n) => hasEntity(actor, n.entity)) &&
@@ -179,6 +208,14 @@ export function exportPackage(
       signatures.some((s) => s.id === e.signatureId),
     ),
     comments: state.comments.filter((c) => c.versionId === version.id),
+    issues: (state.issues ?? []).filter(
+      (issue) =>
+        issue.packageId === packageId && canReadIssue(state, actor, issue),
+    ),
+    assignmentChanges: (state.assignmentChanges ?? []).filter(
+      (change) =>
+        change.versionId === version.id && hasEntity(actor, change.entity),
+    ),
     originalDocumentUrl: `/api/files/${version.fileId}`,
   };
 }

@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   BarChart3,
+  Bell,
+  MessageSquareWarning,
   CheckSquare,
   FileText,
   GitBranch,
@@ -28,6 +30,8 @@ const nav = [
   { id: "my-reviews", label: "My reviews", icon: FileText },
   { id: "documents", label: "Documents", icon: Upload },
   { id: "dashboard", label: "Review dashboard", icon: BarChart3 },
+  { id: "issues", label: "Exceptions", icon: MessageSquareWarning },
+  { id: "notifications", label: "Notifications", icon: Bell },
   { id: "my-tasks", label: "My tasks", icon: CheckSquare },
   { id: "workflow-runs", label: "Workflow runs", icon: Play },
   { id: "workflow-designer", label: "Workflow designer", icon: GitBranch },
@@ -35,7 +39,10 @@ const nav = [
 ];
 
 function canSee(item: (typeof nav)[number], principal: Principal) {
-  if (item.id === "administration") return principal.roles.includes("admin");
+  if (item.id === "administration")
+    return principal.roles.some((r) =>
+      ["admin", "publisher", "manager"].includes(r),
+    );
   if (item.id === "documents")
     return principal.roles.some((r) =>
       ["publisher", "admin", "manager"].includes(r),

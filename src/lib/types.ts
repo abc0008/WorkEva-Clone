@@ -1,3 +1,9 @@
+import type { ReviewIssue } from "./issues-types";
+import type { AssignmentRule, AssignmentChange } from "./admin-types";
+import type {
+  NotificationPreference,
+  NotificationReceipt,
+} from "./notification-types";
 export type Role =
   | "admin"
   | "publisher"
@@ -6,6 +12,7 @@ export type Role =
   | "manager"
   | "reader";
 export type Principal = {
+  revision?: number;
   id: string;
   name: string;
   email: string;
@@ -37,6 +44,13 @@ export type DocumentVersion = {
   uploadedAt: string;
   publishedAt?: string;
   sections: Section[];
+  assignmentRuleSnapshot?: Array<{
+    sectionId: string;
+    ruleId: string;
+    ruleRevision: number;
+    effectiveDate: string;
+    reviewerIds: string[];
+  }>;
   revision: number;
 };
 export type Package = {
@@ -215,6 +229,11 @@ export type IdempotencyRecord = {
   result: unknown;
 };
 export type AppState = {
+  issues?: ReviewIssue[];
+  assignmentRules?: AssignmentRule[];
+  assignmentChanges?: AssignmentChange[];
+  notificationPreferences?: NotificationPreference[];
+  notificationReceipts?: NotificationReceipt[];
   revision: number;
   users: Principal[];
   packages: Package[];

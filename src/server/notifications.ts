@@ -1,6 +1,11 @@
 import { DefaultAzureCredential } from "@azure/identity";
 import { randomUUID } from "node:crypto";
+import { DateTime } from "luxon";
 import type { OutboxEvent, Principal } from "@/lib/types";
+import {
+  isUrgentNotification,
+  type NotificationPreference,
+} from "@/lib/notification-types";
 import { DomainError, now } from "./domain";
 import { readState, transact } from "./store";
 import { taskBlocked } from "./workflow";
@@ -9,6 +14,14 @@ const LEASE_MS = 60_000;
 const SEND_TIMEOUT_MS = 30_000;
 const MAX_ATTEMPTS = 6;
 const BACKOFF_MS = [30_000, 120_000, 600_000, 1_800_000, 7_200_000, 21_600_000];
+const DEFAULT_REMINDER_INTERVAL_MINUTES = 24 * 60;
+const REPEATING_REMINDERS = new Set([
+  "REVIEW_DUE_SOON",
+  "REVIEW_LATE",
+  "DUE_SOON",
+  "TASK_LATE",
+  "TASK_BLOCKED",
+]);
 type LeasedEvent = OutboxEvent & { leaseToken?: string };
 let graphCredential: DefaultAzureCredential | undefined;
 let graphAccessToken: { value: string; expiresAt: number } | undefined;
@@ -30,6 +43,212 @@ function parseDate(value?: string) {
   return value ? Date.parse(value) : 0;
 }
 
+function preferenceFor(
+  state: import("@/lib/types").AppState,
+  userId: string,
+): NotificationPreference {
+  const preference = state.notificationPreferences?.find(
+    (item) => item.userId === userId,
+  );
+  return {
+    userId,
+    emailEnabled: preference?.emailEnabled ?? true,
+    reminderIntervalMinutes:
+      preference?.reminderIntervalMinutes ?? DEFAULT_REMINDER_INTERVAL_MINUTES,
+    timezone: preference?.timezone ?? "UTC",
+    quietHours: preference?.quietHours,
+    urgentBypassQuietHours: preference?.urgentBypassQuietHours ?? false,
+  };
+}
+
+function timeParts(value: string): [number, number] {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return [0, 0];
+  return [Number(match[1]), Number(match[2])];
+}
+
+/** Return the instant at which an event may leave quiet hours, if it is quiet now. */
+export function notificationQuietUntil(
+  preference: NotificationPreference,
+  at = Date.now(),
+): number | undefined {
+  const timezone = preference.timezone || "UTC";
+  const zoneNow = DateTime.fromMillis(at, { zone: timezone });
+  if (!zoneNow.isValid) return undefined;
+  const quiet = preference.quietHours;
+  if (!quiet) return undefined;
+  const [startHour, startMinute] = timeParts(quiet.start);
+  const [endHour, endMinute] = timeParts(quiet.end);
+  const start = zoneNow
+    .startOf("day")
+    .set({ hour: startHour, minute: startMinute });
+  const endSameDay = zoneNow
+    .startOf("day")
+    .set({ hour: endHour, minute: endMinute });
+  const overnight = endSameDay <= start;
+  let end = endSameDay;
+  let inside: boolean;
+  if (overnight) {
+    // The post-midnight part belongs to yesterday's quiet window.
+    if (zoneNow >= start) {
+      end = endSameDay.plus({ days: 1 });
+      inside = true;
+    } else {
+      inside = zoneNow < endSameDay;
+    }
+  } else {
+    inside = zoneNow >= start && zoneNow < end;
+  }
+  if (!inside) return undefined;
+  return end.toMillis();
+}
+
+function deferredUntil(
+  state: import("@/lib/types").AppState,
+  event: OutboxEvent,
+  at = Date.now(),
+): number | undefined {
+  const preference = preferenceFor(state, event.recipientId);
+  if (!preference.emailEnabled) return undefined;
+  if (isUrgentNotification(event.type) && preference.urgentBypassQuietHours)
+    return undefined;
+  return notificationQuietUntil(preference, at);
+}
+
+function ensureNotificationReceipt(
+  state: import("@/lib/types").AppState,
+  event: OutboxEvent,
+) {
+  state.notificationReceipts ??= [];
+  if (
+    !state.notificationReceipts.some(
+      (receipt) =>
+        receipt.eventId === event.id && receipt.userId === event.recipientId,
+    )
+  )
+    state.notificationReceipts.push({
+      id: randomUUID(),
+      userId: event.recipientId,
+      eventId: event.id,
+      causeEventId: event.id,
+      createdAt: event.createdAt,
+    });
+}
+
+function recipientHasScope(
+  state: import("@/lib/types").AppState,
+  recipientId: string,
+  entity: string,
+) {
+  const recipient = state.users.find((user) => user.id === recipientId);
+  return (
+    !!recipient &&
+    recipient.active &&
+    !!recipient.email &&
+    (recipient.entities.includes("*") || recipient.entities.includes(entity))
+  );
+}
+
+/** Keep queued work details from being delivered after ownership or access changes. */
+function eventRecipientStillAuthorized(
+  state: import("@/lib/types").AppState,
+  event: OutboxEvent,
+): boolean {
+  if (event.type.startsWith("REVIEW_")) {
+    const assignment = state.assignments.find(
+      (item) => item.id === event.subjectId,
+    );
+    if (!assignment) return true;
+    const version = state.versions.find(
+      (item) => item.id === assignment.versionId,
+    );
+    const pkg =
+      version && state.packages.find((item) => item.id === version.packageId);
+    return (
+      assignment.reviewerId === event.recipientId &&
+      !!version &&
+      version.status === "PUBLISHED" &&
+      !!pkg &&
+      pkg.currentVersionId === version.id &&
+      recipientHasScope(state, event.recipientId, assignment.entity)
+    );
+  }
+  const taskEvent =
+    event.type === "DUE_SOON" ||
+    event.type.startsWith("TASK_") ||
+    event.type.startsWith("WORKFLOW_") ||
+    event.type.startsWith("DOCUMENT_GATE_");
+  if (taskEvent) {
+    const task = state.runs
+      .flatMap((run) => run.tasks)
+      .find((candidate) => candidate.id === event.subjectId);
+    if (!task) return true;
+    return (
+      task.ownerId === event.recipientId &&
+      recipientHasScope(state, event.recipientId, task.entity)
+    );
+  }
+  if (event.type.startsWith("ISSUE_")) {
+    const issue = state.issues?.find((item) => item.id === event.subjectId);
+    if (!issue) return true;
+    const expectedRecipient =
+      event.type === "ISSUE_RESOLUTION_ACCEPTED"
+        ? issue.createdBy
+        : issue.ownerId;
+    return (
+      expectedRecipient === event.recipientId &&
+      recipientHasScope(state, event.recipientId, issue.entity)
+    );
+  }
+  return true;
+}
+
+function subjectRecovered(
+  state: import("@/lib/types").AppState,
+  event: OutboxEvent,
+): boolean {
+  if (event.type.startsWith("ISSUE_"))
+    return !!state.issues?.some(
+      (issue) => issue.id === event.subjectId && issue.status === "RESOLVED",
+    );
+  if (event.type.startsWith("REVIEW_")) {
+    return state.assignments.some(
+      (assignment) =>
+        assignment.id === event.subjectId && assignment.status === "SIGNED",
+    );
+  }
+  const task = state.runs
+    .flatMap((run) => run.tasks)
+    .find((candidate) => candidate.id === event.subjectId);
+  if (!task) return false;
+  if (["TASK_LATE", "DUE_SOON"].includes(event.type))
+    return ["COMPLETE", "CANCELLED"].includes(task.status);
+  if (event.type === "TASK_BLOCKED") {
+    const run = state.runs.find((candidate) =>
+      candidate.tasks.some((item) => item.id === task.id),
+    );
+    return !!run && !taskBlocked(state, run, task);
+  }
+  return false;
+}
+
+function resolveRecoveredAlerts(state: import("@/lib/types").AppState) {
+  const at = now();
+  for (const event of state.outbox) {
+    ensureNotificationReceipt(state, event);
+    if (!subjectRecovered(state, event)) continue;
+    const receipt = state.notificationReceipts?.find(
+      (candidate) =>
+        candidate.eventId === event.id &&
+        candidate.userId === event.recipientId,
+    );
+    if (receipt && !receipt.resolvedAt) {
+      receipt.resolvedAt = at;
+      receipt.resolution = "The underlying work recovered.";
+    }
+  }
+}
+
 function appBaseUrl(): string {
   const configured = process.env.WORKEVA_BASE_URL?.trim();
   if (!configured)
@@ -45,16 +264,22 @@ function appBaseUrl(): string {
   return parsed.toString().replace(/\/$/, "");
 }
 
-function deepLink(event: OutboxEvent): string {
+export function notificationDeepLink(
+  event: Pick<OutboxEvent, "type" | "subjectId">,
+  base = appBaseUrl(),
+): string {
   const encoded = encodeURIComponent(event.subjectId);
-  const path = event.type.startsWith("REVIEW_")
-    ? `/reviews?assignmentId=${encoded}`
-    : event.type.startsWith("TASK_") ||
-        event.type.startsWith("WORKFLOW_") ||
-        event.type.startsWith("DOCUMENT_GATE_")
-      ? `/tasks?taskId=${encoded}`
-      : `/dashboard?subjectId=${encoded}`;
-  return `${appBaseUrl()}${path}`;
+  const path = event.type.startsWith("ISSUE_")
+    ? `/issues?issueId=${encoded}`
+    : event.type.startsWith("REVIEW_")
+      ? `/reviews?assignmentId=${encoded}`
+      : event.type === "DUE_SOON" ||
+          event.type.startsWith("TASK_") ||
+          event.type.startsWith("WORKFLOW_") ||
+          event.type.startsWith("DOCUMENT_GATE_")
+        ? `/tasks?taskId=${encoded}`
+        : `/dashboard?subjectId=${encoded}`;
+  return `${base.replace(/\/$/, "")}${path}`;
 }
 
 async function graphToken(): Promise<string> {
@@ -135,7 +360,7 @@ async function graphSend(event: OutboxEvent, recipient: Principal) {
             subject: `WorkEva: ${event.type.replaceAll("_", " ").toLowerCase()}`,
             body: {
               contentType: "Text",
-              content: `${event.message}\n\nOpen WorkEva: ${deepLink(event)}`,
+              content: `${event.message}\n\nOpen WorkEva: ${notificationDeepLink(event)}`,
             },
             toRecipients: [{ emailAddress: { address: recipient.email } }],
           },
@@ -163,16 +388,38 @@ async function claimOne(): Promise<
 > {
   return transact((state) => {
     const current = Date.now();
-    const event = state.outbox.find(
-      (item) =>
-        (item.status === "PENDING" &&
-          parseDate(item.nextAttemptAt) <= current) ||
-        (item.status === "PROCESSING" &&
-          !!item.leaseUntil &&
-          Number.isFinite(parseDate(item.leaseUntil)) &&
-          parseDate(item.leaseUntil) <= current),
-    );
+    let event: OutboxEvent | undefined;
+    for (const candidate of state.outbox) {
+      const due =
+        (candidate.status === "PENDING" &&
+          parseDate(candidate.nextAttemptAt) <= current) ||
+        (candidate.status === "PROCESSING" &&
+          !!candidate.leaseUntil &&
+          Number.isFinite(parseDate(candidate.leaseUntil)) &&
+          parseDate(candidate.leaseUntil) <= current);
+      if (!due) continue;
+      if (!eventRecipientStillAuthorized(state, candidate)) {
+        ensureNotificationReceipt(state, candidate);
+        candidate.status = "DRY_RUN";
+        candidate.error =
+          "Notification suppressed because the recipient no longer owns or can access this work.";
+        delete candidate.leaseUntil;
+        continue;
+      }
+      const quietUntil = deferredUntil(state, candidate, current);
+      if (quietUntil !== undefined) {
+        // Deferral does not consume an attempt. This avoids an exhausted retry
+        // budget merely because a worker ran during a user's quiet hours.
+        candidate.status = "PENDING";
+        delete candidate.leaseUntil;
+        candidate.nextAttemptAt = new Date(quietUntil).toISOString();
+        continue;
+      }
+      event = candidate;
+      break;
+    }
     if (!event) return undefined;
+    ensureNotificationReceipt(state, event);
     const leaseToken = randomUUID();
     event.status = "PROCESSING";
     event.leaseUntil = new Date(current + LEASE_MS).toISOString();
@@ -227,6 +474,7 @@ async function finish(
 
 async function enqueueDueNotifications() {
   await transact((state) => {
+    resolveRecoveredAlerts(state);
     const nowMs = Date.now();
     const soonMs = nowMs + 24 * 60 * 60 * 1000;
     const enqueue = (
@@ -235,20 +483,29 @@ async function enqueueDueNotifications() {
       recipientId: string,
       message: string,
     ) => {
-      if (
-        !recipientId ||
-        state.outbox.some(
+      if (!recipientId) return;
+      const priorEvents = state.outbox
+        .filter(
           (event) =>
             event.type === type &&
             event.subjectId === subjectId &&
-            event.recipientId === recipientId &&
-            ["PENDING", "PROCESSING", "SENT", "DRY_RUN", "FAILED"].includes(
-              event.status,
-            ),
+            event.recipientId === recipientId,
         )
+        .sort((a, b) => parseDate(b.createdAt) - parseDate(a.createdAt));
+      const active = priorEvents.some((event) =>
+        ["PENDING", "PROCESSING"].includes(event.status),
+      );
+      if (active) return;
+      const latest = priorEvents[0];
+      const intervalMs =
+        preferenceFor(state, recipientId).reminderIntervalMinutes! * 60_000;
+      if (
+        latest &&
+        (!REPEATING_REMINDERS.has(type) ||
+          parseDate(latest.createdAt) + intervalMs > nowMs)
       )
         return;
-      state.outbox.push({
+      const event: OutboxEvent = {
         id: randomUUID(),
         type,
         subjectId,
@@ -257,7 +514,9 @@ async function enqueueDueNotifications() {
         status: "PENDING",
         attempts: 0,
         createdAt: now(),
-      });
+      };
+      state.outbox.push(event);
+      ensureNotificationReceipt(state, event);
     };
     for (const assignment of state.assignments) {
       if (assignment.status === "SIGNED") continue;
@@ -359,6 +618,24 @@ export async function processOutboxOnce(): Promise<WorkerResult> {
   const claimed = await claimOne();
   if (!claimed) return { processed: false };
   const { event, recipient } = claimed;
+  const preference = (await readState()).notificationPreferences?.find(
+    (item) => item.userId === event.recipientId,
+  );
+  if (preference?.emailEnabled === false) {
+    const accepted = await finish(event as LeasedEvent, {
+      sent: false,
+      dryRun: true,
+      error: "Email notifications are disabled by the recipient.",
+    });
+    const state = await readState();
+    return {
+      processed: true,
+      eventId: event.id,
+      status: accepted
+        ? "DRY_RUN"
+        : state.outbox.find((item) => item.id === event.id)?.status,
+    };
+  }
   if (!configuredSend()) {
     const accepted = await finish(event as LeasedEvent, {
       sent: false,
