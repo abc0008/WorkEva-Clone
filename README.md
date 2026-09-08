@@ -22,6 +22,9 @@ Local records persist under `.data/`; uploaded PDFs are private and served throu
 1. As Avery, open My reviews, inspect the PDF and answer the five required metrics. An explanation or N/A answer requires a comment. Save then explicitly sign.
 2. As Taylor, inspect the management dashboard. Upload a PDF in Documents, configure sections/pages/metrics/owners, then publish. New versions require fresh sign-offs and retain historical context.
 3. In Workflow designer, edit the template and dependencies, publish it and create a period run. In Workflow runs/My tasks, complete and attest prerequisites. Hard edges block dependent work. Reopening signed work invalidates dependent attestations.
+4. In Exceptions, raise a version-linked issue, choose an accountable owner, discuss the concern and propose a resolution. The assigned reviewer accepts the explanation before signing. Replacement versions carry unresolved issues forward; opening or reopening an issue invalidates affected approvals.
+5. As Casey, use Administration to manage access and effective-dated ownership rules. A reasoned reassignment retains the prior responses and signature history and requires fresh decisions from the replacement reviewer.
+6. In Notifications, read assignment and issue updates, follow links to the exact item, and configure reminder frequency and timezone-based quiet hours. Managers can send scoped manual reminders. Delivery still requires the configured outbox worker.
 
 Workflows can also be authored as versioned JSON or YAML and rendered with React Flow. See [the workflow format](docs/WORKFLOW_FORMAT.md) and the equivalent [JSON](examples/quarterly-certification.json) / [YAML](examples/quarterly-certification.yaml) examples. Imports create new drafts; exports preserve dependencies and canvas positions.
 
@@ -44,6 +47,7 @@ Unit and integration tests exercise real server domain rules, access boundaries,
 - `docs/FEATURE_SCOPE.md`: two-feature implementation scope.
 - `docs/API_CONTRACT.md`: shared command/API contracts.
 - `src/server/review.ts`: versioned review rules and signing.
+- `src/server/issues.ts`, `administration.ts`, `notification-commands.ts`: exception resolution, ownership administration and inbox commands.
 - `src/server/workflow.ts`: graph, schedule, task and attestation rules.
 - `src/server/store.ts`: transactional local/Azure SQL persistence.
 - `src/server/auth.ts`, `files.ts`, `databricks.ts`, `notifications.ts`: integration boundaries.

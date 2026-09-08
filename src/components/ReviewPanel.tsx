@@ -33,6 +33,7 @@ import {
 } from "./ui";
 
 type Props = {
+  initialAssignmentId?: string;
   snapshot: AppSnapshot;
   onRefresh: () => Promise<void>;
   setToast: (message: string) => void;
@@ -259,7 +260,12 @@ function SourceLabel({
   );
 }
 
-export function ReviewPanel({ snapshot, onRefresh, setToast }: Props) {
+export function ReviewPanel({
+  snapshot,
+  onRefresh,
+  setToast,
+  initialAssignmentId,
+}: Props) {
   const me = snapshot.principal;
   const published = snapshot.versions.filter((v) => v.status === "PUBLISHED");
   const myAssignments = useMemo(
@@ -277,9 +283,10 @@ export function ReviewPanel({ snapshot, onRefresh, setToast }: Props) {
       myAssignments.some((a) => a.versionId === v.id),
   );
   const [selectedId, setSelectedId] = useState<string | undefined>(
-    initialCurrent
-      ? myAssignments.find((a) => a.versionId === initialCurrent.id)?.id
-      : undefined,
+    initialAssignmentId ||
+      (initialCurrent
+        ? myAssignments.find((a) => a.versionId === initialCurrent.id)?.id
+        : undefined),
   );
   const assignment =
     myAssignments.find((a) => a.id === selectedId) ||
@@ -535,8 +542,14 @@ export function ReviewPanel({ snapshot, onRefresh, setToast }: Props) {
               </div>
             </div>
             <div className="we-guidance">
-              Choose one response per required metric. Comments explain
-              exceptions and are retained with the version.
+              Choose one response per required metric. Track issues through
+              resolution and reviewer acceptance in{" "}
+              <a
+                href={`/issues?assignmentId=${encodeURIComponent(assignment.id)}`}
+              >
+                Exceptions
+              </a>
+              .
             </div>
             <div className="we-checklist-meta">
               <span>Metric</span>

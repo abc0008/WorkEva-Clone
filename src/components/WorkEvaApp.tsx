@@ -9,9 +9,21 @@ import { DocumentsPanel } from "./DocumentsPanel";
 import { DashboardPanel } from "./DashboardPanel";
 import { WorkflowPanel } from "./WorkflowPanel";
 import { AdminPanel } from "./AdminPanel";
+import { IssuesPanel } from "./IssuesPanel";
+import { NotificationsPanel } from "./NotificationsPanel";
 import { ErrorNotice, LoadingState } from "./ui";
 
-export default function WorkEvaApp({ view = "my-reviews" }: { view?: string }) {
+export default function WorkEvaApp({
+  view = "my-reviews",
+  assignmentId,
+  taskId,
+  issueId,
+}: {
+  view?: string;
+  assignmentId?: string;
+  taskId?: string;
+  issueId?: string;
+}) {
   const [activeView, setActiveView] = useState(
     view === "review" ? "my-reviews" : view,
   );
@@ -63,7 +75,23 @@ export default function WorkEvaApp({ view = "my-reviews" }: { view?: string }) {
       </div>
     );
   const panel =
-    activeView === "documents" ? (
+    activeView === "issues" ? (
+      <IssuesPanel
+        key={`${snapshot.principal.id}:${issueId || assignmentId || ""}`}
+        initialIssueId={issueId}
+        initialAssignmentId={assignmentId}
+        snapshot={snapshot}
+        onRefresh={refresh}
+        setToast={setToast}
+      />
+    ) : activeView === "notifications" ? (
+      <NotificationsPanel
+        key={snapshot.principal.id}
+        snapshot={snapshot}
+        onRefresh={refresh}
+        setToast={setToast}
+      />
+    ) : activeView === "documents" ? (
       <DocumentsPanel
         snapshot={snapshot}
         onRefresh={refresh}
@@ -78,6 +106,8 @@ export default function WorkEvaApp({ view = "my-reviews" }: { view?: string }) {
     ) : activeView === "workflow-runs" || activeView === "runs" ? (
       <WorkflowPanel
         mode="runs"
+        initialTaskId={taskId}
+        key={taskId || snapshot.principal.id}
         snapshot={snapshot}
         onRefresh={refresh}
         setToast={setToast}
@@ -92,14 +122,18 @@ export default function WorkEvaApp({ view = "my-reviews" }: { view?: string }) {
     ) : activeView === "my-tasks" || activeView === "tasks" ? (
       <WorkflowPanel
         mode="tasks"
+        initialTaskId={taskId}
+        key={taskId || snapshot.principal.id}
         snapshot={snapshot}
         onRefresh={refresh}
         setToast={setToast}
       />
     ) : activeView === "administration" || activeView === "admin" ? (
-      <AdminPanel snapshot={snapshot} />
+      <AdminPanel snapshot={snapshot} onRefresh={refresh} setToast={setToast} />
     ) : (
       <ReviewPanel
+        initialAssignmentId={assignmentId}
+        key={assignmentId || snapshot.principal.id}
         snapshot={snapshot}
         onRefresh={refresh}
         setToast={setToast}
@@ -117,7 +151,22 @@ export default function WorkEvaApp({ view = "my-reviews" }: { view?: string }) {
           <ErrorNotice message={error} onRetry={() => void refresh()} />
         </div>
       )}
-      {panel}
+      {(assignmentId &&
+        ["reviews", "my-reviews", "issues"].includes(activeView) &&
+        !snapshot.assignments.some(
+          (a) =>
+            a.id === assignmentId &&
+            (activeView === "issues" || a.reviewerId === snapshot.principal.id),
+        )) ||
+      (taskId &&
+        ["tasks", "my-tasks", "runs", "workflow-runs"].includes(activeView) &&
+        !snapshot.runs.some((r) => r.tasks.some((t) => t.id === taskId))) ? (
+        <div className="we-content">
+          <ErrorNotice message="This linked item is unavailable or outside your current access." />
+        </div>
+      ) : (
+        panel
+      )}
       {toast && <div className="we-toast">{toast}</div>}
     </Shell>
   );

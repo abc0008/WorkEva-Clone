@@ -7,6 +7,9 @@ import {
   requireRole,
 } from "./domain";
 import { handleReviewCommand } from "./review";
+import { handleIssueCommand } from "./issues";
+import { handleAdministrationCommand } from "./administration";
+import { handleNotificationCommand } from "./notification-commands";
 import { handleWorkflowCommand, invalidateDocumentGates } from "./workflow";
 export function executeCommand(
   state: AppState,
@@ -20,7 +23,7 @@ export function executeCommand(
   const key = command.idempotencyKey;
   if (signing) requireText(key, "Idempotency key", 200);
   const payloadHash = hash(command);
-  if (key) {
+  if (key && signing) {
     requireText(key, "Idempotency key", 200);
     const prior = state.idempotency.find(
       (r) => r.actorId === actor.id && r.key === key,
@@ -56,7 +59,12 @@ export function executeCommand(
       return prior.result;
     }
   }
-  let result = handleReviewCommand(state, actor, command);
+  let result = handleIssueCommand(state, actor, command);
+  if (result === null)
+    result = handleAdministrationCommand(state, actor, command);
+  if (result === null)
+    result = handleNotificationCommand(state, actor, command);
+  if (result === null) result = handleReviewCommand(state, actor, command);
   if (result === null) result = handleWorkflowCommand(state, actor, command);
   if (result === null) throw new DomainError(422, "Unknown operation.");
   if (["publishVersion", "reopenReview"].includes(command.type)) {
@@ -76,7 +84,7 @@ export function executeCommand(
           : "A required review was reopened.",
       );
   }
-  if (key)
+  if (key && signing)
     state.idempotency.push({
       key: String(key),
       actorId: actor.id,
